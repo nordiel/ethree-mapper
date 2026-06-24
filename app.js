@@ -57,6 +57,7 @@ let state = {
 let nextColorIdx = 0,
   nextPinColorIdx = 0,
   nextShapeColorIdx = 0;
+let dragOccurred = false;
 
 /* ---------- persistence ---------- */
 const STORE_KEY = "pr-mapper-v2";
@@ -241,6 +242,7 @@ function updateLabelVisibility() {
 
 /* ---------- SVG-level events (pins & polygon) ---------- */
 function onSvgClick(e) {
+  if (dragOccurred) { dragOccurred = false; return; }
   if (state.tool !== "pin" && state.tool !== "polygon" && state.tool !== "item") return;
   if (e.target.closest("#pins-layer") || e.target.closest("#shapes-layer") || e.target.closest("#items-layer"))
     return;
@@ -641,6 +643,58 @@ function renderItems() {
       state.items = state.items.filter((it) => it.id !== el.dataset.id);
       renderItems(); renderItemList(); save();
     });
+
+    el.addEventListener("pointerdown", (e) => {
+      if (state.eraser || state.tool === "eraser" || state.tool === "item") return;
+      e.stopPropagation();
+      e.preventDefault();
+
+      const itemId = el.dataset.id;
+      const item = state.items.find((it) => it.id === itemId);
+      if (!item) return;
+      const type = state.itemTypes.find((t) => t.id === item.typeId);
+      if (!type) return;
+
+      const scale = ITEM_MAX / Math.max(type.iw, type.ih, 1);
+      const w = type.iw * scale, h = type.ih * scale;
+      const imgEl = el.querySelector("image");
+      const txtEl = el.querySelector("text");
+      let moved = false;
+
+      el.setPointerCapture(e.pointerId);
+      el.style.cursor = "grabbing";
+
+      const onMove = (me) => {
+        moved = true;
+        const sp = getSvgPoint(me);
+        const { lon, lat } = unproj(sp.x, sp.y);
+        item.lon = lon;
+        item.lat = lat;
+        const p = proj(lon, lat);
+        if (imgEl) {
+          imgEl.setAttribute("x", (p.x - w / 2).toFixed(1));
+          imgEl.setAttribute("y", (p.y - h / 2).toFixed(1));
+        }
+        if (txtEl) {
+          txtEl.setAttribute("x", p.x.toFixed(1));
+          txtEl.setAttribute("y", (p.y + h / 2 + 12).toFixed(1));
+        }
+      };
+
+      const onUp = () => {
+        el.removeEventListener("pointermove", onMove);
+        el.removeEventListener("pointerup", onUp);
+        el.style.cursor = "";
+        if (moved) {
+          dragOccurred = true;
+          setTimeout(() => { dragOccurred = false; }, 100);
+          save();
+        }
+      };
+
+      el.addEventListener("pointermove", onMove);
+      el.addEventListener("pointerup", onUp);
+    });
   });
 }
 function renderItemList() {
@@ -1031,10 +1085,15 @@ function exportImage(format) {
     p.removeAttribute("class");
   });
 
-  // Label visibility: respect current toggle
+  // Label visibility: respect current toggles
   clone.querySelectorAll("text.muni-label").forEach((t) => {
     t.style.opacity = state.showLabels ? "1" : "0";
   });
+  if (!state.showAnnoLabels) {
+    clone.querySelectorAll("text.pin-label, text.shape-label").forEach((t) => {
+      t.style.display = "none";
+    });
+  }
 
   // Drop in-progress drawing
   const dl = clone.querySelector("#drawing-layer");
