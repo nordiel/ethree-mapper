@@ -59,6 +59,8 @@ let nextColorIdx = 0,
   nextPinColorIdx = 0,
   nextShapeColorIdx = 0;
 let dragOccurred = false;
+let view = null;
+let isPanning = false, panStart = null, panDragged = false;
 
 /* ---------- image cache (localStorage, separate from window.storage) ---------- */
 function cacheImage(typeId, dataUrl) {
@@ -202,6 +204,24 @@ function getSvgPoint(e) {
   return pt.matrixTransform(svg.getScreenCTM().inverse());
 }
 
+/* ---------- zoom / pan ---------- */
+function setViewBox(x, y, w, h) {
+  view = { ...view, x, y, w, h };
+  document.getElementById("map").setAttribute("viewBox", `${x} ${y} ${w} ${h}`);
+}
+function zoomBy(factor, svgPx, svgPy) {
+  if (!view) return;
+  const newW = view.w * factor;
+  if (newW > view.defW * 1.5 || newW < view.defW / 15) return;
+  const newH = view.h * factor;
+  const px = svgPx !== undefined ? svgPx : view.x + view.w / 2;
+  const py = svgPy !== undefined ? svgPy : view.y + view.h / 2;
+  setViewBox(px - (px - view.x) * factor, py - (py - view.y) * factor, newW, newH);
+}
+function resetZoom() {
+  if (view) setViewBox(view.defX, view.defY, view.defW, view.defH);
+}
+
 /* ---------- map render ---------- */
 let labelsByFips = {},
   lastHoveredLabel = null;
@@ -211,6 +231,7 @@ function renderMap() {
   const viewMinLon = Math.max(bounds.minLon, -67.32);
   const vbX = (viewMinLon - bounds.minLon) * lonScale * K + PAD;
   const vbW = (bounds.maxLon - viewMinLon) * lonScale * K + PAD;
+  view = { x: vbX, y: 0, w: vbW, h: H, defX: vbX, defY: 0, defW: vbW, defH: H };
   const svg = document.getElementById("map");
   svg.setAttribute(
     "viewBox",
@@ -264,6 +285,7 @@ function updateLabelVisibility() {
 /* ---------- SVG-level events (pins & polygon) ---------- */
 function onSvgClick(e) {
   if (dragOccurred) { dragOccurred = false; return; }
+  if (panDragged) { panDragged = false; return; }
   if (state.tool !== "pin" && state.tool !== "polygon" && state.tool !== "item") return;
   if (e.target.closest("#pins-layer") || e.target.closest("#shapes-layer") || e.target.closest("#items-layer"))
     return;
@@ -464,6 +486,7 @@ function renderRegionLabels() {
   g.innerHTML = html;
 }
 function onMuniClick(e) {
+  if (panDragged) return;
   if (state.tool === "pin" || state.tool === "polygon" || state.tool === "item") return;
   const fips = e.currentTarget.dataset.fips;
   if (state.eraser || state.tool === "eraser") {
@@ -487,6 +510,7 @@ function onMuniClick(e) {
 const tip = document.getElementById("tip"),
   mapWrap = document.getElementById("mapWrap");
 function onMuniHover(e) {
+  if (isPanning) return;
   if (state.tool === "pin" || state.tool === "polygon" || state.tool === "item") return;
   const t = e.currentTarget,
     rect = mapWrap.getBoundingClientRect();
@@ -515,6 +539,58 @@ function hideTip() {
     lastHoveredLabel = null;
   }
 }
+
+/* ---------- zoom / pan events ---------- */
+mapWrap.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  if (!view) return;
+  const factor = (e.deltaY || e.deltaX) > 0 ? 1.18 : 1 / 1.18;
+  const pt = getSvgPoint(e);
+  zoomBy(factor, pt.x, pt.y);
+}, { passive: false });
+
+const mapSvg = document.getElementById("map");
+mapSvg.addEventListener("pointerdown", (e) => {
+  if (e.button !== 0 || !view) return;
+  isPanning = true;
+  panDragged = false;
+  panStart = { screenX: e.clientX, screenY: e.clientY, vx: view.x, vy: view.y };
+  mapSvg.setPointerCapture(e.pointerId);
+});
+mapSvg.addEventListener("pointermove", (e) => {
+  if (!isPanning || !panStart) return;
+  const dx = e.clientX - panStart.screenX;
+  const dy = e.clientY - panStart.screenY;
+  if (!panDragged && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) {
+    panDragged = true;
+    mapSvg.style.cursor = "grabbing";
+  }
+  if (!panDragged) return;
+  hideTip();
+  const rect = mapSvg.getBoundingClientRect();
+  setViewBox(
+    panStart.vx - dx * (view.w / rect.width),
+    panStart.vy - dy * (view.h / rect.height),
+    view.w, view.h
+  );
+});
+mapSvg.addEventListener("pointerup", () => {
+  if (isPanning) {
+    isPanning = false;
+    panStart = null;
+    if (panDragged) updateMapCursor();
+  }
+});
+mapSvg.addEventListener("pointercancel", () => {
+  isPanning = false;
+  panStart = null;
+  panDragged = false;
+  updateMapCursor();
+});
+
+document.getElementById("zoomIn").addEventListener("click", () => zoomBy(1 / 1.5));
+document.getElementById("zoomOut").addEventListener("click", () => zoomBy(1.5));
+document.getElementById("zoomReset").addEventListener("click", resetZoom);
 
 /* ---------- tabs ---------- */
 document.querySelectorAll(".tab").forEach((btn) => {
