@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ethree Municipality Mapper</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+  <header>
+    <div class="brand">
+      <h1>Puerto Rico Municipality Mapper</h1>
+      <span class="eyebrow">Logistics · Coverage Planner</span>
+    </div>
+    <div class="spacer"></div>
+    <div class="header-controls">
+      <label class="toggle-label">
+        <input type="checkbox" id="labelsAlways">
+        <span class="toggle-track"><span class="toggle-thumb"></span></span>
+        Always show names
+      </label>
+      <div class="coverage">
+        <div class="bar"><i id="covBar"></i></div>
+        <span class="num"><b id="covNum">0</b> / 78 municipios</span>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <aside>
+      <div class="tabs">
+        <button class="tab active" data-tab="regions">Regions</button>
+        <button class="tab" data-tab="annotations">Annotations</button>
+      </div>
+
+      <!-- Regions tab -->
+      <div class="tab-panel" id="tab-regions">
+        <div class="side-head">
+          <h2>Regions</h2>
+          <button class="btn-add" id="addRegion">+ Add</button>
+        </div>
+        <div class="wh-list" id="regionList"></div>
+        <div class="tools">
+          <div class="tool-row">
+            <button class="tool-btn" id="eraserBtn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M20 20H7L3 16a2 2 0 0 1 0-3l9-9 8 8-8 8" />
+                <path d="M9 11l6 6" />
+              </svg>
+              Eraser
+            </button>
+            <button class="tool-btn" id="resetBtn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+                <path d="M3 3v5h5" />
+              </svg>
+              Reset all
+            </button>
+          </div>
+          <div class="tool-row">
+            <button class="tool-btn" id="csvBtn">⬇ CSV</button>
+            <button class="tool-btn" id="jsonBtn">⧉ Copy JSON</button>
+          </div>
+          <div class="tool-row">
+            <button class="tool-btn" id="pngBtn">⬇ PNG</button>
+            <button class="tool-btn" id="jpgBtn">⬇ JPG</button>
+          </div>
+          <p class="hint" id="hint">Pick a region, then click municipalities to assign them. Click an assigned area
+            again to clear it.</p>
+        </div>
+      </div>
+
+      <!-- Annotations tab -->
+      <div class="tab-panel hidden" id="tab-annotations">
+        <div class="anno-global">
+          <label class="toggle-label">
+            <input type="checkbox" id="annoLabels" checked>
+            <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            Show annotation labels
+          </label>
+        </div>
+        <div class="anno-section">
+          <div class="anno-head">
+            <h2>Pins</h2>
+            <button class="tool-btn sm" id="pinModeBtn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" />
+                <circle cx="12" cy="9" r="2.5" />
+              </svg>
+              Place Pin
+            </button>
+          </div>
+          <div class="anno-list" id="pinList">
+            <p class="empty-anno">No pins placed yet.</p>
+          </div>
+        </div>
+
+        <div class="anno-section">
+          <div class="anno-head">
+            <h2>Shapes</h2>
+            <button class="tool-btn sm" id="polyModeBtn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polygon points="3,20 12,4 21,20" />
+              </svg>
+              Draw Shape
+            </button>
+          </div>
+          <div class="anno-list" id="shapeList">
+            <p class="empty-anno">No shapes drawn yet.</p>
+          </div>
+          <p class="hint" id="polyHint" style="display:none">Click to place vertices. Double-click to close.
+            <kbd>Esc</kbd> to cancel.
+          </p>
+        </div>
+
+        <div class="anno-section">
+          <div class="anno-head">
+            <h2>Items</h2>
+            <button class="tool-btn sm" id="addItemBtn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="3" width="18" height="18" rx="2" />
+                <circle cx="8.5" cy="8.5" r="1.5" />
+                <polyline points="21,15 16,10 5,21" />
+              </svg>
+              Add Item
+            </button>
+          </div>
+          <div id="itemForm" class="item-form" style="display:none">
+            <input type="text" id="itemLabel" class="item-input" placeholder="Label (e.g. Warehouse A)">
+            <label class="item-upload-label" for="itemFile">
+              <input type="file" id="itemFile" accept="image/*">
+              <img id="itemThumb" class="item-thumb" style="display:none">
+              <span class="item-upload-text" id="itemFileName">Choose image…</span>
+            </label>
+            <div class="item-form-btns">
+              <button class="tool-btn sm" id="itemPlaceBtn" disabled>↗ Place on Map</button>
+              <button class="tool-btn sm" id="itemCancelBtn">Cancel</button>
+            </div>
+          </div>
+          <div class="anno-list" id="itemList">
+            <p class="empty-anno">No items placed yet.</p>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <div class="map-wrap" id="mapWrap">
+      <svg class="map" id="map" preserveAspectRatio="xMidYMid meet"></svg>
+      <div class="tooltip" id="tip">
+        <div class="t-name"></div>
+        <div class="t-wh"></div>
+      </div>
+      <div class="map-foot"><span class="dot"></span><span id="footText">Select a region to begin painting.</span></div>
+    </div>
+  </main>
+
+  <div class="pop" id="pop"></div>
+  <div class="toast" id="toast"></div>
+
+  <!-- footer -->
+  <footer class="app-footer">
+    <div class="footer-left">
+      <div class="footer-accent">
+        <div class="footer-accent-navy"></div>
+        <div class="footer-accent-green"></div>
+      </div>
+      <span class="footer-powered">Powered by</span>
+      <a href="https://www.ethree.solutions/" target="_blank"><img class="footer-logo"
+          src="images/ethree-logos_FullColor.png" alt="ethree solutions"></a>
+    </div>
+    <span class="footer-copy">&copy; 2026 ethree solutions &middot;</span>
+  </footer>
+
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+
+</html>
