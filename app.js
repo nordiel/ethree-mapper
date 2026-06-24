@@ -550,14 +550,15 @@ mapWrap.addEventListener("wheel", (e) => {
 }, { passive: false });
 
 const mapSvg = document.getElementById("map");
+// pointerdown on SVG to start pan tracking (no setPointerCapture — that breaks click events on child paths)
 mapSvg.addEventListener("pointerdown", (e) => {
   if (e.button !== 0 || !view) return;
   isPanning = true;
   panDragged = false;
   panStart = { screenX: e.clientX, screenY: e.clientY, vx: view.x, vy: view.y };
-  mapSvg.setPointerCapture(e.pointerId);
 });
-mapSvg.addEventListener("pointermove", (e) => {
+// pointermove/up on mapWrap so events bubble up from muni paths during drag
+mapWrap.addEventListener("pointermove", (e) => {
   if (!isPanning || !panStart) return;
   const dx = e.clientX - panStart.screenX;
   const dy = e.clientY - panStart.screenY;
@@ -574,14 +575,14 @@ mapSvg.addEventListener("pointermove", (e) => {
     view.w, view.h
   );
 });
-mapSvg.addEventListener("pointerup", () => {
+mapWrap.addEventListener("pointerup", () => {
   if (isPanning) {
     isPanning = false;
     panStart = null;
     if (panDragged) updateMapCursor();
   }
 });
-mapSvg.addEventListener("pointercancel", () => {
+mapWrap.addEventListener("pointercancel", () => {
   isPanning = false;
   panStart = null;
   panDragged = false;
