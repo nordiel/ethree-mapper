@@ -646,6 +646,14 @@ svg.map.labels-always text.muni-label {
   opacity: 1;
 }
 
+/* Draggable item markers */
+.item-marker {
+  cursor: grab;
+}
+.item-marker:active {
+  cursor: grabbing;
+}
+
 /* Pin & shape labels */
 text.pin-label,
 text.shape-label {
