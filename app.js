@@ -45,6 +45,7 @@ let state = {
   eraser: false,
   showLabels: false,
   showAnnoLabels: true,
+  showRegionLabels: false,
   pins: [],
   shapes: [],
   itemTypes: [], // one entry per uploaded image { id, label, dataUrl, iw, ih }
@@ -59,6 +60,22 @@ let nextColorIdx = 0,
   nextShapeColorIdx = 0;
 let dragOccurred = false;
 
+/* ---------- image cache (localStorage, separate from window.storage) ---------- */
+function cacheImage(typeId, dataUrl) {
+  try { localStorage.setItem("emap-img-" + typeId, dataUrl); } catch (e) {}
+}
+function getCachedImage(typeId) {
+  return localStorage.getItem("emap-img-" + typeId) || "";
+}
+function uncacheImage(typeId) {
+  try { localStorage.removeItem("emap-img-" + typeId); } catch (e) {}
+}
+function clearImageCache() {
+  Object.keys(localStorage)
+    .filter((k) => k.startsWith("emap-img-"))
+    .forEach((k) => localStorage.removeItem(k));
+}
+
 /* ---------- persistence ---------- */
 const STORE_KEY = "pr-mapper-v2";
 async function save() {
@@ -72,10 +89,11 @@ async function save() {
           nextColorIdx,
           pins: state.pins,
           shapes: state.shapes,
-          itemTypes: state.itemTypes,
+          itemTypes: state.itemTypes.map(({ dataUrl, ...rest }) => rest),
           items: state.items,
           showLabels: state.showLabels,
           showAnnoLabels: state.showAnnoLabels,
+          showRegionLabels: state.showRegionLabels,
         }),
       );
   } catch (e) {}
@@ -92,17 +110,19 @@ async function load() {
         state.shapes = d.shapes || [];
         // migrate old flat items (had dataUrl) to types + instances
         if (d.itemTypes) {
-          state.itemTypes = d.itemTypes;
+          state.itemTypes = d.itemTypes.map((t) => ({ ...t, dataUrl: getCachedImage(t.id) }));
           state.items = d.items || [];
         } else if (d.items && d.items.length && d.items[0].dataUrl) {
           d.items.forEach((old) => {
             const t = { id: "type" + old.id, label: old.label, dataUrl: old.dataUrl, iw: old.iw, ih: old.ih };
+            cacheImage(t.id, t.dataUrl);
             state.itemTypes.push(t);
             state.items.push({ id: old.id, typeId: t.id, lon: old.lon, lat: old.lat });
           });
         }
         state.showLabels = d.showLabels || false;
-        state.showAnnoLabels = d.showAnnoLabels !== false; // default true
+        state.showAnnoLabels = d.showAnnoLabels !== false;
+        state.showRegionLabels = d.showRegionLabels || false;
         nextColorIdx = d.nextColorIdx || state.regions.length;
         return true;
       }
@@ -214,6 +234,7 @@ function renderMap() {
     <g id="muni-paths">${muniHtml}</g>
     <g id="shapes-layer"></g>
     <g id="muni-labels">${labelHtml}</g>
+    <g id="region-labels-layer"></g>
     <g id="pins-layer"></g>
     <g id="items-layer"></g>
     <g id="drawing-layer"></g>`;
@@ -411,6 +432,36 @@ function paintMap() {
     const r = rid ? regionById(rid) : null;
     p.style.fill = r ? r.color : "";
   });
+  renderRegionLabels();
+}
+
+function renderRegionLabels() {
+  const g = document.getElementById("region-labels-layer");
+  if (!g) return;
+  if (!state.showRegionLabels) { g.innerHTML = ""; return; }
+
+  let html = "";
+  state.regions.forEach((region) => {
+    const assignedFips = new Set(
+      Object.entries(state.assignments)
+        .filter(([, rid]) => rid === region.id)
+        .map(([fips]) => fips)
+    );
+    if (!assignedFips.size) return;
+
+    const pts = [];
+    GEO.features.forEach((f) => {
+      if (!assignedFips.has(String(f.properties.fips))) return;
+      const c = featureCentroid(f);
+      if (c) pts.push(proj(c.lon, c.lat));
+    });
+    if (!pts.length) return;
+
+    const cx = (pts.reduce((s, p) => s + p.x, 0) / pts.length).toFixed(1);
+    const cy = (pts.reduce((s, p) => s + p.y, 0) / pts.length).toFixed(1);
+    html += `<text class="region-label" style="fill:${region.color}" x="${cx}" y="${cy}">${escapeHtml(region.name)}</text>`;
+  });
+  g.innerHTML = html;
 }
 function onMuniClick(e) {
   if (state.tool === "pin" || state.tool === "polygon" || state.tool === "item") return;
@@ -496,8 +547,14 @@ function renderList() {
       "wh" +
       (state.selected === r.id && state.tool === "paint" ? " active" : "");
     row.innerHTML = `
-      <span class="swatch" style="background:${r.color}" title="Change color"></span>
-      <input class="name" value="${escapeHtml(r.name)}" spellcheck="false">
+      <input type="color" class="swatch" value="${r.color}" title="Change color">
+      <span class="name-text">${escapeHtml(r.name)}</span>
+      <button class="edit-btn" title="Rename">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+        </svg>
+      </button>
       <span class="count mono">${counts[r.id] || 0}</span>
       <button class="del" title="Delete region">×</button>`;
     row.addEventListener("click", () => {
@@ -508,19 +565,39 @@ function renderList() {
       renderList();
       updateFoot();
     });
-    row.querySelector(".swatch").addEventListener("click", (ev) => {
+    const swatchInp = row.querySelector(".swatch");
+    swatchInp.addEventListener("click", (ev) => ev.stopPropagation());
+    swatchInp.addEventListener("input", (ev) => {
+      r.color = ev.target.value;
+      paintMap(); renderList(); updateFoot();
+    });
+    swatchInp.addEventListener("change", () => save());
+    const nameSpan = row.querySelector(".name-text");
+    const editBtn = row.querySelector(".edit-btn");
+    editBtn.addEventListener("click", (ev) => {
       ev.stopPropagation();
-      openPalette(r, ev.currentTarget);
-    });
-    const nameInp = row.querySelector(".name");
-    nameInp.addEventListener("click", (ev) => ev.stopPropagation());
-    nameInp.addEventListener("input", () => {
-      r.name = nameInp.value;
-    });
-    nameInp.addEventListener("change", () => {
-      r.name = nameInp.value.trim() || "Untitled";
-      nameInp.value = r.name;
-      save();
+      const inp = document.createElement("input");
+      inp.className = "name";
+      inp.value = r.name;
+      inp.spellcheck = false;
+      nameSpan.replaceWith(inp);
+      editBtn.style.visibility = "hidden";
+      inp.focus();
+      inp.select();
+      const done = () => {
+        r.name = inp.value.trim() || r.name;
+        nameSpan.textContent = r.name;
+        inp.replaceWith(nameSpan);
+        editBtn.style.visibility = "";
+        renderRegionLabels();
+        save();
+      };
+      inp.addEventListener("blur", done);
+      inp.addEventListener("keydown", (ke) => {
+        if (ke.key === "Enter") inp.blur();
+        if (ke.key === "Escape") { inp.value = r.name; inp.blur(); }
+      });
+      inp.addEventListener("click", (ke) => ke.stopPropagation());
     });
     row.querySelector(".del").addEventListener("click", (ev) => {
       ev.stopPropagation();
@@ -740,6 +817,7 @@ function renderItemList() {
         state.tool = "paint"; state.pendingItem = null; state.pendingItemId = null;
         updateMapCursor(); updateFoot(); syncEraser();
       }
+      uncacheImage(type.id);
       state.itemTypes = state.itemTypes.filter((t) => t.id !== type.id);
       state.items = state.items.filter((it) => it.typeId !== type.id);
       renderItems(); renderItemList(); save();
@@ -788,6 +866,7 @@ itemPlaceBtn.addEventListener("click", () => {
   const label = itemLabelEl.value.trim() || "Item " + (state.itemTypes.length + 1);
   const newType = { id: "type" + Date.now(), label, dataUrl: pendingDataUrl, iw: pendingNW || 100, ih: pendingNH || 100 };
   state.itemTypes.push(newType);
+  cacheImage(newType.id, newType.dataUrl);
   state.pendingItem = { ...newType };
   state.pendingItemId = newType.id;
   state.tool = "item";
@@ -805,33 +884,6 @@ itemCancelBtn.addEventListener("click", () => {
     state.tool = "paint"; state.pendingItem = null; state.pendingItemId = null;
     updateMapCursor(); updateFoot(); syncEraser(); renderItemList();
   }
-});
-
-/* ---------- color popover ---------- */
-const pop = document.getElementById("pop");
-function openPalette(item, anchor) {
-  pop.innerHTML =
-    "<b>Color</b>" +
-    PALETTE.map(
-      (c) => `<span class="c" style="background:${c}" data-c="${c}"></span>`,
-    ).join("");
-  const r = anchor.getBoundingClientRect();
-  pop.style.left = Math.min(r.left, window.innerWidth - 214) + "px";
-  pop.style.top = r.bottom + 6 + "px";
-  pop.classList.add("show");
-  pop.querySelectorAll(".c").forEach((el) =>
-    el.addEventListener("click", () => {
-      item.color = el.dataset.c;
-      pop.classList.remove("show");
-      paintMap();
-      renderList();
-      save();
-    }),
-  );
-}
-document.addEventListener("click", (e) => {
-  if (!pop.contains(e.target) && !e.target.classList.contains("swatch"))
-    pop.classList.remove("show");
 });
 
 /* ---------- tool buttons ---------- */
@@ -858,8 +910,9 @@ document.getElementById("resetBtn").addEventListener("click", () => {
   state.assignments = {};
   state.pins = [];
   state.shapes = [];
-  state.itemTypes = [];
   state.items = [];
+  state.itemTypes.forEach((t) => uncacheImage(t.id));
+  state.itemTypes = [];
   paintMap();
   renderList();
   renderPins(); renderPinList();
@@ -946,6 +999,11 @@ function updateAnnoLabels() {
 document.getElementById("annoLabels").addEventListener("change", function () {
   state.showAnnoLabels = this.checked;
   updateAnnoLabels();
+  save();
+});
+document.getElementById("regionLabels").addEventListener("change", function () {
+  state.showRegionLabels = this.checked;
+  renderRegionLabels();
   save();
 });
 
@@ -1051,7 +1109,7 @@ document.getElementById("jsonBtn").addEventListener("click", async () => {
 });
 
 /* ---------- image export ---------- */
-function exportImage(format) {
+function exportImage(format, filename) {
   const svg = document.getElementById("map");
   const vb = svg.viewBox.baseVal;
 
@@ -1129,7 +1187,7 @@ function exportImage(format) {
     const mime = format === "jpg" ? "image/jpeg" : "image/png";
     const a = document.createElement("a");
     a.href = canvas.toDataURL(mime, 0.92);
-    a.download = `pr_municipality_map.${format}`;
+    a.download = filename;
     a.click();
     toast(`${format.toUpperCase()} downloaded`);
   };
@@ -1139,14 +1197,146 @@ function exportImage(format) {
   };
   img.src = url;
 }
+function doExportMap(filename) {
+  const data = {
+    version: 1,
+    regions: state.regions,
+    assignments: state.assignments,
+    nextColorIdx,
+    pins: state.pins,
+    shapes: state.shapes,
+    itemTypes: state.itemTypes,
+    items: state.items,
+    showLabels: state.showLabels,
+    showAnnoLabels: state.showAnnoLabels,
+    showRegionLabels: state.showRegionLabels,
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  toast("Map exported");
+}
+
+/* ---------- export filename modal ---------- */
+let _exportConfirmCb = null;
+const exportModal = document.getElementById("exportModal");
+const exportFileNameEl = document.getElementById("exportFileName");
+const exportFileExtEl = document.getElementById("exportFileExt");
+
+function openExportModal(title, suggestedName, ext, onConfirm) {
+  document.getElementById("exportModalTitle").textContent = title;
+  exportFileNameEl.value = suggestedName;
+  exportFileExtEl.textContent = "." + ext;
+  _exportConfirmCb = (name) => onConfirm(name + "." + ext);
+  exportModal.classList.add("show");
+  requestAnimationFrame(() => { exportFileNameEl.focus(); exportFileNameEl.select(); });
+}
+function closeExportModal() {
+  exportModal.classList.remove("show");
+  _exportConfirmCb = null;
+}
+document.getElementById("exportModalCancel").addEventListener("click", closeExportModal);
+document.getElementById("exportModalConfirm").addEventListener("click", () => {
+  const name = exportFileNameEl.value.trim();
+  if (!name) return;
+  const cb = _exportConfirmCb;
+  closeExportModal();
+  if (cb) cb(name);
+});
+exportFileNameEl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") document.getElementById("exportModalConfirm").click();
+  if (e.key === "Escape") closeExportModal();
+});
+exportModal.addEventListener("click", (e) => { if (e.target === exportModal) closeExportModal(); });
+
 document
   .getElementById("pngBtn")
-  .addEventListener("click", () => exportImage("png"));
+  .addEventListener("click", () => {
+    const base = mapFileName("png").slice(0, -4);
+    openExportModal("Export as PNG", base, "png", (f) => exportImage("png", f));
+  });
 document
   .getElementById("jpgBtn")
-  .addEventListener("click", () => exportImage("jpg"));
+  .addEventListener("click", () => {
+    const base = mapFileName("jpg").slice(0, -4);
+    openExportModal("Export as JPG", base, "jpg", (f) => exportImage("jpg", f));
+  });
+
+/* ---------- map export / import ---------- */
+document.getElementById("exportMapBtn").addEventListener("click", () => {
+  const base = mapFileName("emap").slice(0, -5);
+  openExportModal("Export Map", base, "emap", (f) => doExportMap(f));
+});
+
+document.getElementById("importMapBtn").addEventListener("click", () => {
+  document.getElementById("importFile").click();
+});
+
+document.getElementById("importFile").addEventListener("change", (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    try {
+      const d = JSON.parse(ev.target.result);
+      state.regions = d.regions || [];
+      state.assignments = d.assignments || {};
+      state.pins = d.pins || [];
+      state.shapes = d.shapes || [];
+      state.itemTypes = (d.itemTypes || []).map((t) => {
+        if (t.dataUrl) cacheImage(t.id, t.dataUrl);
+        return { ...t, dataUrl: t.dataUrl || getCachedImage(t.id) };
+      });
+      state.items = d.items || [];
+      state.showLabels = d.showLabels || false;
+      state.showAnnoLabels = d.showAnnoLabels !== false;
+      state.showRegionLabels = d.showRegionLabels || false;
+      nextColorIdx = d.nextColorIdx || state.regions.length;
+
+      // Reset any active tool state
+      state.selected = null;
+      state.pendingItem = null;
+      state.pendingItemId = null;
+      state.tool = "paint";
+      state.eraser = false;
+      state.drawingShape = null;
+
+      // Sync checkboxes
+      document.getElementById("labelsAlways").checked = state.showLabels;
+      document.getElementById("annoLabels").checked = state.showAnnoLabels;
+      document.getElementById("regionLabels").checked = state.showRegionLabels;
+
+      // Re-render everything
+      paintMap(); renderList();
+      renderPins(); renderPinList();
+      renderShapes(); renderShapeList();
+      renderItems(); renderItemList();
+      updateCoverage();
+      updateLabelVisibility();
+      updateAnnoLabels();
+      syncEraser();
+      updateFoot();
+      save();
+      toast("Map imported");
+    } catch {
+      toast("Import failed — invalid file");
+    }
+    e.target.value = "";
+  };
+  reader.readAsText(file);
+});
 
 /* ---------- utils ---------- */
+function mapFileName(ext) {
+  const now = new Date();
+  const date = now.toISOString().slice(0, 10);
+  const time = now.toTimeString().slice(0, 5).replace(":", "");
+  return `pr-map-${date}-${time}.${ext}`;
+}
 function escapeHtml(s) {
   return String(s).replace(
     /[&<>"]/g,
@@ -1177,6 +1367,7 @@ function toast(m) {
   }
   document.getElementById("labelsAlways").checked = state.showLabels;
   document.getElementById("annoLabels").checked = state.showAnnoLabels;
+  document.getElementById("regionLabels").checked = state.showRegionLabels;
   updateAnnoLabels();
   paintMap();
   renderList();

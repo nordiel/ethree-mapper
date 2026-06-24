@@ -21,6 +21,11 @@
         <span class="toggle-track"><span class="toggle-thumb"></span></span>
         Always show names
       </label>
+      <label class="toggle-label">
+        <input type="checkbox" id="regionLabels">
+        <span class="toggle-track"><span class="toggle-thumb"></span></span>
+        Show regions
+      </label>
       <div class="coverage">
         <div class="bar"><i id="covBar"></i></div>
         <span class="num"><b id="covNum">0</b> / 78 municipios</span>
@@ -66,6 +71,11 @@
           <div class="tool-row">
             <button class="tool-btn" id="pngBtn">⬇ PNG</button>
             <button class="tool-btn" id="jpgBtn">⬇ JPG</button>
+          </div>
+          <div class="tool-row">
+            <button class="tool-btn" id="exportMapBtn">⬇ Export</button>
+            <button class="tool-btn" id="importMapBtn">⬆ Import</button>
+            <input type="file" id="importFile" accept=".emap" style="display:none">
           </div>
           <p class="hint" id="hint">Pick a region, then click municipalities to assign them. Click an assigned area
             again to clear it.</p>
@@ -156,8 +166,23 @@
     </div>
   </main>
 
-  <div class="pop" id="pop"></div>
   <div class="toast" id="toast"></div>
+
+  <!-- Export filename modal -->
+  <div class="modal-overlay" id="exportModal">
+    <div class="modal">
+      <h3 class="modal-title" id="exportModalTitle">Export</h3>
+      <label class="modal-label" for="exportFileName">File name</label>
+      <div class="modal-input-row">
+        <input class="modal-input" id="exportFileName" type="text" spellcheck="false" autocomplete="off">
+        <span class="modal-ext" id="exportFileExt">.png</span>
+      </div>
+      <div class="modal-btns">
+        <button class="tool-btn" id="exportModalCancel">Cancel</button>
+        <button class="tool-btn modal-confirm" id="exportModalConfirm">Export</button>
+      </div>
+    </div>
+  </div>
 
   <!-- footer -->
   <footer class="app-footer">
